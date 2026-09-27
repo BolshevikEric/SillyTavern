@@ -124,15 +124,66 @@ const keyMigrationMap = [
         migrate: () => void 0,
         remove: true,
     },
+    // User accounts and authentication are not part of this build.
     {
-        oldKey: 'autheliaAuth',
-        newKey: 'sso.autheliaAuth',
-        migrate: (value) => value,
+        oldKey: 'basicAuthMode',
+        newKey: 'basicAuthMode',
+        migrate: () => void 0,
+        remove: true,
     },
     {
-        oldKey: 'authentikAuth',
-        newKey: 'sso.authentikAuth',
-        migrate: (value) => value,
+        oldKey: 'basicAuthUser',
+        newKey: 'basicAuthUser',
+        migrate: () => void 0,
+        remove: true,
+    },
+    {
+        oldKey: 'enableUserAccounts',
+        newKey: 'enableUserAccounts',
+        migrate: () => void 0,
+        remove: true,
+    },
+    {
+        oldKey: 'enableDiscreetLogin',
+        newKey: 'enableDiscreetLogin',
+        migrate: () => void 0,
+        remove: true,
+    },
+    {
+        oldKey: 'perUserBasicAuth',
+        newKey: 'perUserBasicAuth',
+        migrate: () => void 0,
+        remove: true,
+    },
+    {
+        oldKey: 'sso',
+        newKey: 'sso',
+        migrate: () => void 0,
+        remove: true,
+    },
+    {
+        oldKey: 'rateLimiting.basicAuthMaxAttempts',
+        newKey: 'rateLimiting.basicAuthMaxAttempts',
+        migrate: () => void 0,
+        remove: true,
+    },
+    {
+        oldKey: 'rateLimiting.accountsLoginMaxAttempts',
+        newKey: 'rateLimiting.accountsLoginMaxAttempts',
+        migrate: () => void 0,
+        remove: true,
+    },
+    {
+        oldKey: 'rateLimiting.accountsRecoverMaxAttempts',
+        newKey: 'rateLimiting.accountsRecoverMaxAttempts',
+        migrate: () => void 0,
+        remove: true,
+    },
+    {
+        oldKey: 'rateLimiting.accountsResetMaxAttempts',
+        newKey: 'rateLimiting.accountsResetMaxAttempts',
+        migrate: () => void 0,
+        remove: true,
     },
 ];
 

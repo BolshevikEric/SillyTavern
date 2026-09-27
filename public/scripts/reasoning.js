@@ -1691,9 +1691,22 @@ export async function loadReasoningTemplates(data) {
 }
 
 /**
+ * Whether the reasoning module already registered its handlers, commands and macros.
+ * Registering them a second time would run every handler twice for the same event.
+ * @type {boolean}
+ */
+let reasoningInitialized = false;
+
+/**
  * Initializes reasoning settings and event handlers.
  */
 export function initReasoning() {
+    if (reasoningInitialized) {
+        return;
+    }
+
+    reasoningInitialized = true;
+
     loadReasoningSettings();
     setReasoningEventHandlers();
     registerReasoningSlashCommands();

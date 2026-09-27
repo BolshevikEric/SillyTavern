@@ -32,18 +32,16 @@ import {
     getUserDirectoriesList,
     migrateSystemPrompts,
     migrateUserData,
-    requireLoginMiddleware,
     setUserDataMiddleware,
-    shouldRedirectToLogin,
     cleanUploads,
     getSessionCookieAge,
     verifySecuritySettings,
-    loginPageMiddleware,
     migratePublicOverrides,
 } from './users.js';
 
 import getWebpackServeMiddleware from './middleware/webpack-serve.js';
-import basicAuthMiddleware from './middleware/basicAuth.js';
+import getPublicLibConfig from '../webpack.config.js';
+import { getAssetOptimizerMiddleware, warmupAssets, setAssetVersion, computeAssetVersion } from './middleware/assetOptimizer.js';
 import getWhitelistMiddleware from './middleware/whitelist.js';
 import accessLoggerMiddleware, { getAccessLogPath, migrateAccessLog } from './middleware/accessLogWriter.js';
 import multerMonkeyPatch from './middleware/multerMonkeyPatch.js';
@@ -66,7 +64,6 @@ import {
 import { UPLOADS_DIRECTORY } from './constants.js';
 
 // Routers
-import { router as usersPublicRouter } from './endpoints/users-public.js';
 import { init as statsInit, onExit as statsOnExit } from './endpoints/stats.js';
 import { checkForNewContent } from './endpoints/content-manager.js';
 import { init as settingsInit } from './endpoints/settings.js';
@@ -104,7 +101,11 @@ const app = express();
 app.use(helmet({
     contentSecurityPolicy: false,
 }));
-app.use(compression());
+app.use(compression({
+    // Responses that already carry a Content-Encoding (e.g. brotli from the asset optimizer)
+    // must not be compressed a second time.
+    filter: (request, response) => !response.getHeader('Content-Encoding') && compression.filter(request, response),
+}));
 app.use(responseTime());
 
 app.use(bodyParser.json({ limit: '500mb' }));
@@ -138,9 +139,6 @@ if (corsEnabled) {
     app.use(cors(corsOptions));
 }
 
-if (cliArgs.listen && cliArgs.basicAuthMode) {
-    app.use(basicAuthMiddleware);
-}
 
 if (cliArgs.whitelistMode) {
     const whitelistMiddleware = await getWhitelistMiddleware();
@@ -211,14 +209,9 @@ if (!cliArgs.disableCsrf) {
 
 // Static files
 // Host index page
-app.get('/', cacheBuster.middleware, (request, response) => {
-    if (shouldRedirectToLogin(request)) {
-        const query = request.url.split('?')[1];
-        const redirectUrl = query ? `/login?${query}` : '/login';
-        return response.redirect(redirectUrl);
-    }
-
-    return response.sendFile('index.html', { root: path.join(serverDirectory, 'public') });
+app.get('/', cacheBuster.middleware, (request, response, next) => {
+    // The asset optimizer serves index.html with versioned asset references.
+    return next();
 });
 
 // Callback endpoint for OAuth PKCE flows (e.g. OpenRouter)
@@ -233,19 +226,30 @@ app.get('/callback/:source?', (request, response) => {
 });
 
 // Host login page
-app.get('/login', loginPageMiddleware);
 
 // Host frontend assets
 const webpackMiddleware = getWebpackServeMiddleware();
+const publicDirectory = path.join(serverDirectory, 'public');
+const publicLibConfig = getPublicLibConfig();
+const assetOptimizerOptions = {
+    root: publicDirectory,
+    fingerprint: !!getConfigValue('assetOptimization.fingerprintModules', false, 'boolean'),
+    brotli: !!getConfigValue('assetOptimization.brotli', true, 'boolean'),
+    virtualFiles: new Map([
+        // The webpack bundle lives outside the public directory but is imported by the frontend.
+        ['/lib.js', path.join(publicLibConfig.output.path, publicLibConfig.output.filename)],
+        // Serve the index page through the optimizer so its asset references get a version.
+        ['/', path.join(publicDirectory, 'index.html')],
+    ]),
+};
+app.use(getAssetOptimizerMiddleware(assetOptimizerOptions));
 app.use(webpackMiddleware);
 app.use(userCssMiddleware);
-app.use(express.static(path.join(serverDirectory, 'public'), {}));
+app.use(express.static(publicDirectory, {}));
 
 // Public API
-app.use('/api/users', usersPublicRouter);
 
 // Everything below this line requires authentication
-app.use(requireLoginMiddleware);
 app.post('/api/ping', (request, response) => {
     if (request.query.extend && request.session) {
         request.session.touch = Date.now();
@@ -352,6 +356,14 @@ async function preSetupTasks() {
 
     // Wait for frontend libs to compile
     await webpackMiddleware.runWebpackCompiler({ pruneCache: true });
+
+    // The webpack bundle is part of the frontend, so it has to exist before assets are versioned.
+    const assetVersion = computeAssetVersion({
+        roots: [publicDirectory],
+        extraFiles: [assetOptimizerOptions.virtualFiles.get('/lib.js')],
+    });
+    setAssetVersion(assetVersion);
+    console.log(`Frontend asset version: ${color.green(assetVersion)}`);
 }
 
 /**
@@ -417,6 +429,9 @@ async function postSetupTasks(result) {
     }
 
     setWindowTitle('SillyTavern WebServer');
+
+    // Pre-compress static assets in the background so the first visitor does not pay for it.
+    warmupAssets(assetOptimizerOptions).catch(error => console.error('[Assets] Warmup failed:', error.message));
 
     let logListen = 'SillyTavern is listening on';
 

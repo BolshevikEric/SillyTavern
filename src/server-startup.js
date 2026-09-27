@@ -5,11 +5,8 @@ import { color, urlHostnameToIPv6, getHasIP } from './util.js';
 
 // Express routers
 import { router as userDataRouter } from './users.js';
-import { router as usersPrivateRouter } from './endpoints/users-private.js';
-import { router as usersAdminRouter } from './endpoints/users-admin.js';
 import { router as movingUIRouter } from './endpoints/moving-ui.js';
 import { router as imagesRouter } from './endpoints/images.js';
-import { router as quickRepliesRouter } from './endpoints/quick-replies.js';
 import { router as avatarsRouter } from './endpoints/avatars.js';
 import { router as themesRouter } from './endpoints/themes.js';
 import { router as openAiRouter } from './endpoints/openai.js';
@@ -32,12 +29,8 @@ import { router as contentManagerRouter } from './endpoints/content-manager.js';
 import { router as settingsRouter } from './endpoints/settings.js';
 import { router as backgroundsRouter } from './endpoints/backgrounds.js';
 import { router as spritesRouter } from './endpoints/sprites.js';
-import { router as stableDiffusionRouter } from './endpoints/stable-diffusion.js';
 import { router as hordeRouter } from './endpoints/horde.js';
-import { router as vectorsRouter } from './endpoints/vectors.js';
-import { router as translateRouter } from './endpoints/translate.js';
 import { router as classifyRouter } from './endpoints/classify.js';
-import { router as captionRouter } from './endpoints/caption.js';
 import { router as searchRouter } from './endpoints/search.js';
 import { router as openRouterRouter } from './endpoints/openrouter.js';
 import { router as nanogptRouter } from './endpoints/nanogpt.js';
@@ -122,8 +115,6 @@ export function redirectDeprecatedEndpoints(app) {
     redirect('/getuseravatars', '/api/avatars/get');
     redirect('/deleteuseravatar', '/api/avatars/delete');
     redirect('/uploaduseravatar', '/api/avatars/upload');
-    redirect('/deletequickreply', '/api/quick-replies/delete');
-    redirect('/savequickreply', '/api/quick-replies/save');
     redirect('/uploadimage', '/api/images/upload');
     redirect('/listimgfiles/:folder', '/api/images/list/:folder');
     redirect('/api/content/import', '/api/content/importURL');
@@ -139,11 +130,8 @@ export function redirectDeprecatedEndpoints(app) {
  */
 export function setupPrivateEndpoints(app) {
     app.use('/', userDataRouter);
-    app.use('/api/users', usersPrivateRouter);
-    app.use('/api/users', usersAdminRouter);
     app.use('/api/moving-ui', movingUIRouter);
     app.use('/api/images', imagesRouter);
-    app.use('/api/quick-replies', quickRepliesRouter);
     app.use('/api/avatars', avatarsRouter);
     app.use('/api/themes', themesRouter);
     app.use('/api/openai', openAiRouter);
@@ -166,12 +154,8 @@ export function setupPrivateEndpoints(app) {
     app.use('/api/sprites', spritesRouter);
     app.use('/api/content', contentManagerRouter);
     app.use('/api/settings', settingsRouter);
-    app.use('/api/sd', stableDiffusionRouter);
     app.use('/api/horde', hordeRouter);
-    app.use('/api/vector', vectorsRouter);
-    app.use('/api/translate', translateRouter);
     app.use('/api/extra/classify', classifyRouter);
-    app.use('/api/extra/caption', captionRouter);
     app.use('/api/search', searchRouter);
     app.use('/api/backends/text-completions', textCompletionsRouter);
     app.use('/api/openrouter', openRouterRouter);

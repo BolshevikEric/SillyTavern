@@ -30,7 +30,6 @@ import { initConfig } from './config-init.js';
  * @property {string} keyPath Path to private key
  * @property {string} keyPassphrase SSL private key passphrase
  * @property {boolean} whitelistMode If enable whitelist mode
- * @property {boolean} basicAuthMode If enable basic authentication
  * @property {boolean} enableKeepAlive Enable HTTP/HTTPS keep-alive globally
  * @property {boolean} requestProxyEnabled If enable outgoing request proxy
  * @property {string} requestProxyUrl Request proxy URL
@@ -76,7 +75,6 @@ export class CommandLineParser {
             keyPath: 'certs/privkey.pem',
             keyPassphrase: '',
             whitelistMode: true,
-            basicAuthMode: false,
             enableKeepAlive: false,
             requestProxyEnabled: false,
             requestProxyUrl: '',
@@ -214,11 +212,6 @@ export class CommandLineParser {
                 default: null,
                 describe: 'Root directory for data storage (only for standalone mode)',
             })
-            .option('basicAuthMode', {
-                type: 'boolean',
-                default: null,
-                describe: 'Enables basic authentication',
-            })
             .option('enableKeepAlive', {
                 type: 'boolean',
                 default: null,
@@ -319,7 +312,6 @@ export class CommandLineParser {
             keyPath: cliArguments.keyPath ?? getConfigValue('ssl.keyPath', defaultConfig.keyPath),
             keyPassphrase: cliArguments.keyPassphrase ?? getConfigValue('ssl.keyPassphrase', defaultConfig.keyPassphrase),
             whitelistMode: cliArguments.whitelist ?? getConfigValue('whitelistMode', defaultConfig.whitelistMode, 'boolean'),
-            basicAuthMode: cliArguments.basicAuthMode ?? getConfigValue('basicAuthMode', defaultConfig.basicAuthMode, 'boolean'),
             enableKeepAlive: cliArguments.enableKeepAlive ?? getConfigValue('enableKeepAlive', defaultConfig.enableKeepAlive, 'boolean'),
             requestProxyEnabled: cliArguments.requestProxyEnabled ?? getConfigValue('requestProxy.enabled', defaultConfig.requestProxyEnabled, 'boolean'),
             requestProxyUrl: cliArguments.requestProxyUrl ?? getConfigValue('requestProxy.url', defaultConfig.requestProxyUrl),

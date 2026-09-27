@@ -1,0 +1,112 @@
+# 小带宽部署的 Nginx 反代样例（HTTP/2 + 缓存 + 长连接）
+#
+# 用法：
+#   1. 把 SillyTavern 的 config.yaml 里 listen 保持 false，让它只监听 127.0.0.1:8000；
+#   2. 把本文件放到 /etc/nginx/conf.d/ 或 sites-available 下，改掉 server_name 与证书路径；
+#   3. nginx -t && systemctl reload nginx
+#
+# 说明：SillyTavern 自身已经输出 Brotli 压缩，所以这里不再开 gzip 重压静态资源，
+# 只保留 gzip 作为极老客户端的兜底（nginx 原生不支持 brotli 压缩）。
+
+# 静态资源缓存目录（首次请求后由 nginx 直接从内存/磁盘返回，不再回源）
+proxy_cache_path /var/cache/nginx/sillytavern
+                 levels=1:2
+                 keys_zone=st_assets:32m
+                 max_size=2g
+                 inactive=30d
+                 use_temp_path=off;
+
+upstream sillytavern {
+    server 127.0.0.1:8000;
+    keepalive 32;            # 复用与后端的连接，省掉每次请求的 TCP 握手
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;                # HTTP/2：一个连接跑完 250 个请求，低带宽高延迟下差别巨大
+    server_name st.example.com;
+
+    ssl_certificate     /etc/nginx/ssl/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/privkey.pem;
+
+    # 大文件上传（角色卡、头像、聊天导入）
+    client_max_body_size 500m;
+    client_body_timeout 300s;
+
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_types text/plain text/css text/javascript application/javascript application/json
+               image/svg+xml application/xml;
+    # 注意：不要 gzip 已经带 Content-Encoding 的响应，nginx 会自动跳过。
+
+    # ---- 静态资源：命中缓存直接返回，回源时透传后端的 Brotli ----
+    location ~* ^/(scripts|css|webfonts|img|sounds|locales)/ {
+        proxy_pass http://sillytavern;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # 保留客户端原始的 Accept-Encoding，让后端决定是否返回 brotli
+        proxy_set_header Accept-Encoding $http_accept_encoding;
+
+        proxy_cache st_assets;
+        proxy_cache_key $scheme$request_method$host$request_uri;
+        proxy_cache_valid 200 304 7d;
+        proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+        proxy_cache_lock on;              # 同一资源并发回源只放一个请求过去
+        add_header X-Cache-Status $upstream_cache_status;
+    }
+
+    # webpack 打包的前端库（体积最大，务必让缓存吃掉）
+    location = /lib.js {
+        proxy_pass http://sillytavern;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header Accept-Encoding $http_accept_encoding;
+
+        proxy_cache st_assets;
+        proxy_cache_key $scheme$request_method$host$request_uri;
+        proxy_cache_valid 200 304 7d;
+        proxy_cache_lock on;
+        add_header X-Cache-Status $upstream_cache_status;
+    }
+
+    # ---- 流式生成接口：必须关闭缓冲，否则回复会攒完才吐出来 ----
+    location /api/backends/ {
+        proxy_pass http://sillytavern;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        chunked_transfer_encoding on;
+    }
+
+    # ---- 其余请求（首页、API）不做缓存 ----
+    location / {
+        proxy_pass http://sillytavern;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Accept-Encoding $http_accept_encoding;
+        proxy_buffering off;
+        proxy_read_timeout 600s;
+    }
+}
+
+# 可选：把 http 跳到 https
+server {
+    listen 80;
+    server_name st.example.com;
+    return 301 https://$host$request_uri;
+}

@@ -151,9 +151,6 @@ export const extension_settings = {
         chara: [],
         wiAddition: [],
     },
-    caption: {
-        refine_mode: false,
-    },
     expressions: {
         /** @type {number} see `EXPRESSION_API` */
         api: undefined,
@@ -183,16 +180,7 @@ export const extension_settings = {
     character_allowed_regex: [],
     /** @type {Record<string, string[]>} */
     preset_allowed_regex: {},
-    tts: {},
-    sd: {
-        prompts: {},
-        character_prompts: {},
-        character_negative_prompts: {},
-    },
-    chromadb: {},
-    translate: {},
     objective: {},
-    quickReply: {},
     randomizer: {
         controls: [],
         fluctuation: 0.1,
@@ -201,7 +189,6 @@ export const extension_settings = {
     speech_recognition: {},
     rvc: {},
     hypebot: {},
-    vectors: {},
     variables: {
         global: {},
     },
@@ -396,6 +383,30 @@ function hasExtensionHook(name, hookName) {
 }
 
 /**
+ * Version query for built-in extension files, taken from this module's own URL.
+ *
+ * Built-in extensions live in the public directory and are served with a version in their URL.
+ * Asking for them at the same version keeps one single cached copy per module, instead of a
+ * filename that the browser keeps serving from cache with an outdated version inside.
+ * Third-party extensions are left untouched: they live in the user directory and can be
+ * updated independently of the frontend build.
+ * @param {string} name Extension name
+ * @returns {string} Query string to append, or an empty string
+ */
+function getExtensionAssetVersionQuery(name) {
+    if (name.startsWith('third-party/')) {
+        return '';
+    }
+
+    try {
+        const version = new URL(import.meta.url).searchParams.get('v');
+        return version ? `?v=${encodeURIComponent(version)}` : '';
+    } catch {
+        return '';
+    }
+}
+
+/**
  * Calls a manifest hook for an extension.
  * Hooks are optional function names exported from the extension's JS entry point module.
  * The hook function can optionally return a Promise that will be awaited.
@@ -431,9 +442,8 @@ async function callExtensionHook(name, hookName) {
         return;
     }
 
-    const url = `/scripts/extensions/${name}/${manifest.js}`;
+    const url = `/scripts/extensions/${name}/${manifest.js}${getExtensionAssetVersionQuery(name)}`;
     console.debug(`callExtensionHook: Calling hook "${hookName}" (function "${hookFunctionName}") for extension "${name}"`);
-
     try {
         const module = await import(url);
 
@@ -784,7 +794,7 @@ function addExtensionStyle(name, manifest) {
     }
 
     return new Promise((resolve, reject) => {
-        const url = `/scripts/extensions/${name}/${manifest.css}`;
+        const url = `/scripts/extensions/${name}/${manifest.css}${getExtensionAssetVersionQuery(name)}`;
         const id = sanitizeSelector(`${name}-css`);
 
         if ($(`link[id="${id}"]`).length === 0) {
@@ -816,7 +826,7 @@ function addExtensionScript(name, manifest) {
     }
 
     return new Promise((resolve, reject) => {
-        const url = `/scripts/extensions/${name}/${manifest.js}`;
+        const url = `/scripts/extensions/${name}/${manifest.js}${getExtensionAssetVersionQuery(name)}`;
         const id = sanitizeSelector(`${name}-js`);
         let ready = false;
 

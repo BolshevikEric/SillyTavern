@@ -4,41 +4,28 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import process from 'node:process';
-import { Buffer } from 'node:buffer';
 
 // Express and other dependencies
 import storage from 'node-persist';
 import express from 'express';
-import mime from 'mime-types';
-import archiver from 'archiver';
 import _ from 'lodash';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
-import sanitize from 'sanitize-filename';
-import ipMatching from 'ip-matching';
 
-import { USER_DIRECTORY_TEMPLATE, DEFAULT_USER, PUBLIC_DIRECTORIES, SETTINGS_FILE, UPLOADS_DIRECTORY } from './constants.js';
-import { getConfigValue, color, delay, generateTimestamp, invalidateFirefoxCache, isPathUnderParent, setPermissionsSync } from './util.js';
-import { allowKeysExposure, readSecret, writeSecret, SECRETS_FILE } from './endpoints/secrets.js';
+import { USER_DIRECTORY_TEMPLATE, DEFAULT_USER, PUBLIC_DIRECTORIES, UPLOADS_DIRECTORY } from './constants.js';
+import { getConfigValue, color, delay, invalidateFirefoxCache, isPathUnderParent, setPermissionsSync } from './util.js';
+import { readSecret, writeSecret } from './endpoints/secrets.js';
 import { getContentOfType } from './endpoints/content-manager.js';
 import { serverDirectory } from './server-directory.js';
-import { filterValidIpPatterns, getIpFromRequest } from './express-common.js';
 import { extensionsEnabledFeatureGuard } from './endpoints/extensions.js';
 
 export const KEY_PREFIX = 'user:';
-const AVATAR_PREFIX = 'avatar:';
-const ENABLE_ACCOUNTS = getConfigValue('enableUserAccounts', false, 'boolean');
-const AUTHELIA_AUTH = getConfigValue('sso.autheliaAuth', false, 'boolean');
-const AUTHENTIK_AUTH = getConfigValue('sso.authentikAuth', false, 'boolean');
-const PER_USER_BASIC_AUTH = getConfigValue('perUserBasicAuth', false, 'boolean');
 const ANON_CSRF_SECRET = crypto.randomBytes(64).toString('base64');
-const TRUSTED_PROXIES = filterValidIpPatterns(getConfigValue('sso.trustedProxies', ['127.0.0.1', '::1']) ?? [], (entry, message) => `${color.red('Warning')}: Ignoring invalid sso.trustedProxies entry ${color.yellow(entry)} - ${message}`);
 
 /**
  * Cache for user directories.
  * @type {Map<string, UserDirectoryList>}
  */
 const DIRECTORIES_CACHE = new Map();
-const PUBLIC_USER_AVATAR = '/img/default-user.png';
 const COOKIE_SECRET_PATH = 'cookie-secret.txt';
 
 const STORAGE_KEYS = {
@@ -130,69 +117,31 @@ export async function ensurePublicDirectoriesExist() {
 }
 
 /**
- * Prints an error message and exits the process if necessary
- * @param {string} message The error message to print
- * @returns {void}
- */
-function logSecurityAlert(message) {
-    const { basicAuthMode, whitelistMode } = globalThis.COMMAND_LINE_ARGS;
-    if (basicAuthMode || whitelistMode) return; // safe!
-    console.error(color.red(message));
-    if (getConfigValue('securityOverride', false, 'boolean')) {
-        console.warn(color.red('Security has been overridden. If it\'s not a trusted network, change the settings.'));
-        return;
-    }
-    process.exit(1);
-}
-
-/**
- * Verifies the security settings and prints warnings if necessary
+ * Verifies the security settings and prints warnings if necessary.
+ *
+ * There is no authentication in this build, so listening on a non-localhost address
+ * without an IP whitelist exposes the data directory to everyone who can reach the port.
  * @returns {Promise<void>}
  */
 export async function verifySecuritySettings() {
-    const { listen, basicAuthMode } = globalThis.COMMAND_LINE_ARGS;
+    const { listen, whitelistMode } = globalThis.COMMAND_LINE_ARGS;
 
     // Skip all security checks as listen is set to false
     if (!listen) {
         return;
     }
 
-    if (!ENABLE_ACCOUNTS) {
-        logSecurityAlert('Your current SillyTavern configuration is insecure (listening to non-localhost). Enable whitelisting, basic authentication or user accounts.');
+    if (whitelistMode) {
+        return;
     }
 
-    const users = await getAllEnabledUsers();
-    const unprotectedUsers = users.filter(x => !x.password);
-    const unprotectedAdminUsers = unprotectedUsers.filter(x => x.admin);
-
-    if (unprotectedUsers.length > 0) {
-        console.warn(color.blue('A friendly reminder that the following users are not password protected:'));
-        unprotectedUsers.map(x => `${color.yellow(x.handle)} ${color.red(x.admin ? '(admin)' : '')}`).forEach(x => console.warn(x));
-        console.log();
-        console.warn(`Consider setting a password in the admin panel or by using the ${color.blue('recover.js')} script.`);
-        console.log();
-
-        if (unprotectedAdminUsers.length > 0) {
-            logSecurityAlert('If you are not using basic authentication or whitelisting, you should set a password for all admin users.');
-        }
+    if (getConfigValue('securityOverride', false, 'boolean')) {
+        console.warn(color.red('Security has been overridden. If it\'s not a trusted network, change the settings.'));
+        return;
     }
 
-    if (basicAuthMode) {
-        const perUserBasicAuth = getConfigValue('perUserBasicAuth', false, 'boolean');
-        if (perUserBasicAuth && !ENABLE_ACCOUNTS) {
-            console.error(color.red(
-                'Per-user basic authentication is enabled, but user accounts are disabled. This configuration may be insecure.',
-            ));
-        } else if (!perUserBasicAuth) {
-            const basicAuthUserName = getConfigValue('basicAuthUser.username', '');
-            const basicAuthUserPassword = getConfigValue('basicAuthUser.password', '');
-            if (!basicAuthUserName || !basicAuthUserPassword) {
-                console.warn(color.yellow(
-                    'Basic Authentication is enabled, but username or password is not set or empty!',
-                ));
-            }
-        }
-    }
+    console.error(color.red('Your current SillyTavern configuration is insecure (listening to non-localhost). Enable whitelisting or set "securityOverride" in the config if you know what you are doing.'));
+    process.exit(1);
 }
 
 export function cleanUploads() {
@@ -540,15 +489,6 @@ export function toKey(handle) {
 }
 
 /**
- * Converts a user handle to a storage key for avatars.
- * @param {string} handle User handle
- * @returns {string} The key for the avatar storage
- */
-export function toAvatarKey(handle) {
-    return `${AVATAR_PREFIX}${handle}`;
-}
-
-/**
  * Initializes the user storage.
  * @param {string} dataRoot The root directory for user data
  * @returns {Promise<void>}
@@ -598,14 +538,6 @@ export function getCookieSecret(dataRoot) {
 }
 
 /**
- * Generates a random password salt.
- * @returns {string} The password salt
- */
-export function getPasswordSalt() {
-    return crypto.randomBytes(16).toString('base64');
-}
-
-/**
  * Get the session name for the current server.
  * @returns {string} The session name
  */
@@ -633,16 +565,6 @@ export function getSessionCookieAge() {
     // 0 means session cookie is deleted when the browser session ends
     // (depends on the implementation of the browser)
     return undefined;
-}
-
-/**
- * Hashes a password using scrypt with the provided salt.
- * @param {string} password Password to hash
- * @param {string} salt Salt to use for hashing
- * @returns {string} Hashed password
- */
-export function getPasswordHash(password, salt) {
-    return crypto.scryptSync(password.normalize(), salt, 64).toString('base64');
 }
 
 /**
@@ -697,364 +619,20 @@ export function getUserDirectories(handle) {
 }
 
 /**
- * Gets the avatar URL for the provided user.
- * @param {string} handle User handle
- * @returns {Promise<string>} User avatar URL
- */
-export async function getUserAvatar(handle) {
-    try {
-        // Check if the user has a custom avatar
-        const avatarKey = toAvatarKey(handle);
-        const avatar = await storage.getItem(avatarKey);
-
-        if (avatar) {
-            return avatar;
-        }
-
-        // Fallback to reading from files if custom avatar is not set
-        const directory = getUserDirectories(handle);
-        const pathToSettings = path.join(directory.root, SETTINGS_FILE);
-        const settings = fs.existsSync(pathToSettings) ? JSON.parse(fs.readFileSync(pathToSettings, 'utf8')) : {};
-        const avatarFile = settings?.power_user?.default_persona || settings?.user_avatar;
-        if (!avatarFile) {
-            return PUBLIC_USER_AVATAR;
-        }
-        const avatarPath = path.join(directory.avatars, sanitize(avatarFile));
-        if (!fs.existsSync(avatarPath)) {
-            return PUBLIC_USER_AVATAR;
-        }
-        const mimeType = mime.lookup(avatarPath);
-        const base64Content = fs.readFileSync(avatarPath, 'base64');
-        return `data:${mimeType};base64,${base64Content}`;
-    } catch {
-        // Ignore errors
-        return PUBLIC_USER_AVATAR;
-    }
-}
-
-/**
- * Checks if the user should be redirected to the login page.
- * @param {import('express').Request} request Request object
- * @returns {boolean} Whether the user should be redirected to the login page
- */
-export function shouldRedirectToLogin(request) {
-    return ENABLE_ACCOUNTS && !request.user;
-}
-
-/**
- * Tries auto-login if there is only one user and it's not password protected.
- * or another configured method such authlia or basic
- * @param {import('express').Request} request Request object
- * @param {boolean} basicAuthMode If Basic auth mode is enabled
- * @returns {Promise<boolean>} Whether auto-login was performed
- */
-export async function tryAutoLogin(request, basicAuthMode) {
-    if (!ENABLE_ACCOUNTS || request.user || !request.session) {
-        return false;
-    }
-
-    if (!request.query.noauto) {
-        if (await singleUserLogin(request)) {
-            return true;
-        }
-
-        if (AUTHELIA_AUTH && await autheliaUserLogin(request)) {
-            return true;
-        }
-
-        if (AUTHENTIK_AUTH && await authentikUserLogin(request)) {
-            return true;
-        }
-
-        if (basicAuthMode && PER_USER_BASIC_AUTH && await basicUserLogin(request)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-/**
- * Tries auto-login if there is only one user and it's not password protected.
- * @param {import('express').Request} request Request object
- * @returns {Promise<boolean>} Whether auto-login was performed
- */
-async function singleUserLogin(request) {
-    if (!request.session) {
-        return false;
-    }
-
-    const userHandles = await getAllUserHandles();
-    if (userHandles.length === 1) {
-        const user = await storage.getItem(toKey(userHandles[0]));
-        if (user && !user.password) {
-            request.session.handle = userHandles[0];
-            request.session.version = getAccountVersion(user);
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
- * Attempts auto-login using an Authelia header.
- * https://www.authelia.com/integration/trusted-header-sso/introduction/
- * @param {import('express').Request} request Request object
- * @returns {Promise<boolean>} Whether auto-login was performed
- */
-async function autheliaUserLogin(request) {
-    return headerUserLogin(request, 'Remote-User');
-}
-
-/**
- * Attempts auto-login using an Authentik header.
- * https://docs.goauthentik.io/add-secure-apps/providers/proxy/forward_auth/
- * @param {import('express').Request} request Request object
- * @returns {Promise<boolean>} Whether auto-login was performed
- */
-async function authentikUserLogin(request) {
-    return headerUserLogin(request, 'X-Authentik-Username');
-}
-
-/**
- * Check if the request can authenticate SSO users based on the trusted proxies configuration and the request's IP address.
- * @param {string} ip The IP address of the request
- * @return {boolean} If the request is from a trusted proxy based on the configuration
- */
-function isRequestFromTrustedProxy(ip) {
-    if (!Array.isArray(TRUSTED_PROXIES)) {
-        console.warn(color.yellow('sso.trustedProxies is not an array. Please check your config.yaml. SSO auto-login will not work.'));
-        return false;
-    }
-
-    // Bypass magic value check if the user explicitly configured
-    if (TRUSTED_PROXIES.length === 1 && TRUSTED_PROXIES[0] === '*') {
-        console.warn(color.yellow('sso.trustedProxies is set to accept all IPs. This is not recommended for production environments.'));
-        return true;
-    }
-
-    // If the IP is missing or unknown, we can't trust it
-    if (!ip || ip === 'unknown') {
-        return false;
-    }
-
-    // At least one entry in the trusted proxies list must match the request IP for it to be considered trusted
-    for (const entry of TRUSTED_PROXIES) {
-        try {
-            // This will throw if the entry is not a valid IP or CIDR
-            const match = ipMatching.getMatch(entry);
-            if (ipMatching.matches(ip, match)) {
-                return true;
-            }
-        } catch (e) {
-            continue;
-        }
-    }
-
-    return false;
-}
-
-/**
- * Tries auto-login with a given header.
- * @param {import('express').Request} request Request object
- * @param {string} [header='Remote-User'] The header to use for the trusted user
- * @returns {Promise<boolean>} Whether auto-login was performed
- */
-async function headerUserLogin(request, header = 'Remote-User') {
-    if (!request.session) {
-        return false;
-    }
-
-    const remoteUser = request.get(header);
-    if (!remoteUser) {
-        return false;
-    }
-    console.debug(`Attempting auto-login for user from header ${header}: ${remoteUser}`);
-
-    const ip = getIpFromRequest(request);
-    const isTrusted = isRequestFromTrustedProxy(ip);
-    if (!isTrusted) {
-        console.warn(color.yellow(`Received ${header} header from untrusted IP ${ip}. Ignoring for auto-login.`));
-        return false;
-    }
-
-    const userHandles = await getAllUserHandles();
-    for (const userHandle of userHandles) {
-        if (remoteUser.toLowerCase() === userHandle) {
-            const user = await storage.getItem(toKey(userHandle));
-            if (user && user.enabled) {
-                request.session.handle = userHandle;
-                request.session.version = getAccountVersion(user);
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-/**
- * Tries auto-login with basic auth username.
- * @param {import('express').Request} request Request object
- * @returns {Promise<boolean>} Whether auto-login was performed
- */
-async function basicUserLogin(request) {
-    if (!request.session) {
-        return false;
-    }
-
-    const authHeader = request.headers.authorization;
-
-    if (!authHeader) {
-        return false;
-    }
-
-    const [scheme, credentials] = authHeader.split(' ');
-
-    if (scheme !== 'Basic' || !credentials) {
-        return false;
-    }
-
-    const [username, ...passwordParts] = Buffer.from(credentials, 'base64')
-        .toString('utf8')
-        .split(':');
-    const password = passwordParts.join(':');
-
-    const userHandles = await getAllUserHandles();
-    for (const userHandle of userHandles) {
-        if (username === userHandle) {
-            const user = await storage.getItem(toKey(userHandle));
-            // Verify pass again here just to be sure
-            if (user && user.enabled && user.password && user.password === getPasswordHash(password, user.salt)) {
-                request.session.handle = userHandle;
-                request.session.version = getAccountVersion(user);
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
-/**
- * Gets the account version tag for the provided user.
- * @param {User} user User account object
- * @returns {string} Account version tag
- */
-export function getAccountVersion(user) {
-    return crypto.createHash('shake256', { outputLength: 8 })
-        .update(JSON.stringify([user.handle, user.password, user.salt]))
-        .digest('hex');
-}
-
-/**
  * Middleware to add user data to the request object.
+ * Every request is served as the built-in single user.
  * @param {import('express').Request} request Request object
  * @param {import('express').Response} response Response object
  * @param {import('express').NextFunction} next Next function
  */
 export async function setUserDataMiddleware(request, response, next) {
-    // If user accounts are disabled, use the default user
-    if (!ENABLE_ACCOUNTS) {
-        const handle = DEFAULT_USER.handle;
-        const directories = getUserDirectories(handle);
-        request.user = {
-            profile: DEFAULT_USER,
-            directories: directories,
-        };
-        return next();
-    }
-
-    if (!request.session) {
-        console.error('Session not available');
-        return response.sendStatus(500);
-    }
-
-    // If user accounts are enabled, get the user from the session
-    let handle = request.session?.handle;
-
-    // If we have the only user and it's not password protected, use it
-    if (!handle) {
-        return next();
-    }
-
-    /** @type {User} */
-    const user = await storage.getItem(toKey(handle));
-
-    if (!user) {
-        console.error('User not found:', handle);
-        return next();
-    }
-
-    if (!user.enabled) {
-        console.error('User is disabled:', handle);
-        return next();
-    }
-
-    if (Object.hasOwn(request.session, 'version')) {
-        if (request.session.version !== getAccountVersion(user)) {
-            console.warn('User data has changed since the session was created. Invalidating session for user:', handle);
-            request.session.handle = null;
-            request.session.csrfToken = null;
-            request.session.version = null;
-            request.session = null;
-            return response.sendStatus(403);
-        }
-    } else {
-        // If there is no version in the session, it means it's an old session. Upgrade it by adding the version.
-        request.session.version = getAccountVersion(user);
-    }
-
-    const directories = getUserDirectories(handle);
+    const handle = DEFAULT_USER.handle;
     request.user = {
-        profile: user,
-        directories: directories,
+        profile: DEFAULT_USER,
+        directories: getUserDirectories(handle),
     };
 
-    // Touch the session if loading the home page
-    if (request.method === 'GET' && request.path === '/') {
-        request.session.touch = Date.now();
-    }
-
     return next();
-}
-
-/**
- * Middleware to add user data to the request object.
- * @param {import('express').Request} request Request object
- * @param {import('express').Response} response Response object
- * @param {import('express').NextFunction} next Next function
- */
-export function requireLoginMiddleware(request, response, next) {
-    if (!request.user) {
-        return response.sendStatus(403);
-    }
-
-    return next();
-}
-
-/**
- * Middleware to host the login page.
- * @param {import('express').Request} request Request object
- * @param {import('express').Response} response Response object
- */
-export async function loginPageMiddleware(request, response) {
-    if (!ENABLE_ACCOUNTS) {
-        console.log('User accounts are disabled. Redirecting to index page.');
-        return response.redirect('/');
-    }
-
-    try {
-        const { basicAuthMode } = globalThis.COMMAND_LINE_ARGS;
-        const autoLogin = await tryAutoLogin(request, basicAuthMode);
-
-        if (autoLogin) {
-            return response.redirect('/');
-        }
-    } catch (error) {
-        console.error('Error during auto-login:', error);
-    }
-
-    return response.sendFile('login.html', { root: path.join(serverDirectory, 'public') });
 }
 
 /**
@@ -1117,93 +695,6 @@ function createExtensionsRouteHandler(directoryFn) {
             return res.sendStatus(500);
         }
     };
-}
-
-/**
- * Verifies that the current user is an admin.
- * @param {import('express').Request} request Request object
- * @param {import('express').Response} response Response object
- * @param {import('express').NextFunction} next Next function
- * @returns {any}
- */
-export function requireAdminMiddleware(request, response, next) {
-    if (!request.user) {
-        return response.sendStatus(403);
-    }
-
-    if (request.user.profile.admin) {
-        return next();
-    }
-
-    console.warn('Unauthorized access to admin endpoint:', request.originalUrl);
-    return response.sendStatus(403);
-}
-
-/**
- * Creates an archive of the user's data root directory.
- * @param {string} handle User handle
- * @param {import('express').Response} response Express response object to write to
- * @returns {Promise<void>} Promise that resolves when the archive is created
- */
-export async function createBackupArchive(handle, response) {
-    const directories = getUserDirectories(handle);
-
-    console.info('Backup requested for', handle);
-    const archive = archiver('zip');
-
-    archive.on('error', function (err) {
-        response.status(500).send({ error: err.message });
-    });
-
-    // On stream closed we can end the request
-    archive.on('end', function () {
-        console.info('Archive wrote %d bytes', archive.pointer());
-        response.end(); // End the Express response
-    });
-
-    const timestamp = generateTimestamp();
-
-    // Set the archive name
-    response.attachment(`${handle}-${timestamp}.zip`);
-
-    // This is the streaming magic
-    // @ts-ignore
-    archive.pipe(response);
-
-    // Append files from a sub-directory, putting its contents at the root of archive
-    const ignore = allowKeysExposure ? [] : [SECRETS_FILE, 'backups/secrets_migration_*.json'];
-    archive.glob('**/*', {
-        cwd: directories.root,
-        follow: false,
-        stat: true,
-        dot: true,
-        ignore,
-    });
-    archive.finalize();
-}
-
-/**
- * Gets all of the users.
- * @returns {Promise<User[]>}
- */
-async function getAllUsers() {
-    if (!ENABLE_ACCOUNTS) {
-        return [];
-    }
-    /**
-     * @type {User[]}
-     */
-    const users = await storage.values();
-    return users;
-}
-
-/**
- * Gets all of the enabled users.
- * @returns {Promise<User[]>}
- */
-export async function getAllEnabledUsers() {
-    const users = await getAllUsers();
-    return users.filter(x => x.enabled);
 }
 
 /**

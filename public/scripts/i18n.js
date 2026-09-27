@@ -2,8 +2,9 @@ import { registerDebugFunction } from './power-user.js';
 import { updateSecretDisplay } from './secrets.js';
 
 const storageKey = 'language';
-const overrideLanguage = localStorage.getItem(storageKey);
-const localeFile = String(overrideLanguage || navigator.language || navigator.userLanguage || 'en').toLowerCase();
+// 只保留简体中文语言包：忽略浏览器语言与历史选择，固定使用 zh-cn，
+// 否则浏览器语言为其他地区时会找不到语言包而回落到英文界面。
+const localeFile = 'zh-cn';
 var langs;
 // Don't change to let/const! It will break module loading.
 // eslint-disable-next-line prefer-const
@@ -263,6 +264,10 @@ export function applyLocale(root = document) {
 function addLanguagesToDropdown() {
     const uiLanguageSelects = $('#ui_language_select, #onboarding_ui_language_select');
     for (const langObj of langs) { // Set the value to the language code
+        // Skip languages that are already offered by the markup.
+        if (uiLanguageSelects.find(`option[value="${langObj.lang}"]`).length > 0) {
+            continue;
+        }
         const option = document.createElement('option');
         option.value = langObj.lang; // Set the value to the language code
         option.innerText = langObj.display; // Set the display text to the language name
