@@ -36,6 +36,17 @@ const CACHE_CONTROL_DEFAULT = 'public, max-age=86400, stale-while-revalidate=604
 /** Bodies that do not match the requested version must not be cached under that URL. */
 const CACHE_CONTROL_NO_CACHE = 'no-cache';
 
+/**
+ * User-installed extensions are updated at runtime through the extension manager and have no URL
+ * versioning, so every response must be revalidated. Long-lived caching would make browsers keep
+ * running the previous build - including its baked-in version that extensions compare against the
+ * upstream one for their update prompts - until the TTL expires.
+ */
+const CACHE_CONTROL_EXTENSIONS = 'no-cache';
+
+/** Request paths under this prefix belong to user-installed extensions. */
+const THIRD_PARTY_EXTENSION_PREFIX = '/scripts/extensions/third-party/';
+
 /** HTML must always be revalidated: it carries the current asset version. */
 const CACHE_CONTROL_HTML = 'no-cache, must-revalidate';
 
@@ -501,6 +512,8 @@ export function getAssetOptimizerMiddleware({ root, virtualFiles = new Map(), fi
 
             if (extension === '.html') {
                 response.setHeader('Cache-Control', CACHE_CONTROL_HTML);
+            } else if (requestPath.startsWith(THIRD_PARTY_EXTENSION_PREFIX)) {
+                response.setHeader('Cache-Control', CACHE_CONTROL_EXTENSIONS);
             } else if (requestedVersion !== null && !isStaleVersion) {
                 response.setHeader('Cache-Control', CACHE_CONTROL_IMMUTABLE);
             } else if (isStaleVersion) {
