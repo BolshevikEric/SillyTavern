@@ -383,24 +383,46 @@ function hasExtensionHook(name, hookName) {
 }
 
 /**
- * Version query for built-in extension files, taken from this module's own URL.
+ * Validators received when an extension's manifest.json was last revalidated, keyed by
+ * extension id. Used to version third-party asset URLs: those files are replaced on disk at
+ * runtime, and a URL that changes with the manifest makes the browser fetch the new build
+ * even while it still has stored freshness for the previous one.
+ * @type {Map<string, string>}
+ */
+const thirdPartyAssetVersions = new Map();
+
+/**
+ * Turns a response validator (ETag or Last-Modified) into a URL-safe version token.
+ * @param {string} validator Header value
+ * @returns {string} Token consisting of word characters and dashes
+ */
+function toVersionToken(validator) {
+    return validator.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Version query for extension asset URLs.
  *
  * Built-in extensions live in the public directory and are served with a version in their URL.
  * Asking for them at the same version keeps one single cached copy per module, instead of a
  * filename that the browser keeps serving from cache with an outdated version inside.
- * Third-party extensions are left untouched: they live in the user directory and can be
- * updated independently of the frontend build.
+ * Third-party extensions are left to the validator of their manifest.json: they live in the
+ * user directory and can be updated independently of the frontend build.
  * @param {string} name Extension name
+ * @param {string} file Asset path as written in the manifest, may already carry a query string
  * @returns {string} Query string to append, or an empty string
  */
-function getExtensionAssetVersionQuery(name) {
+function getExtensionAssetVersionQuery(name, file = '') {
+    const joiner = file.includes('?') ? '&' : '?';
+
     if (name.startsWith('third-party/')) {
-        return '';
+        const version = thirdPartyAssetVersions.get(name);
+        return version ? `${joiner}v=${version}` : '';
     }
 
     try {
         const version = new URL(import.meta.url).searchParams.get('v');
-        return version ? `?v=${encodeURIComponent(version)}` : '';
+        return version ? `${joiner}v=${encodeURIComponent(version)}` : '';
     } catch {
         return '';
     }
@@ -442,7 +464,7 @@ async function callExtensionHook(name, hookName) {
         return;
     }
 
-    const url = `/scripts/extensions/${name}/${manifest.js}${getExtensionAssetVersionQuery(name)}`;
+    const url = `/scripts/extensions/${name}/${manifest.js}${getExtensionAssetVersionQuery(name, manifest.js)}`;
     console.debug(`callExtensionHook: Calling hook "${hookName}" (function "${hookFunctionName}") for extension "${name}"`);
     try {
         const module = await import(url);
@@ -550,8 +572,17 @@ async function getManifests(names) {
 
     for (const name of names) {
         const promise = new Promise((resolve, reject) => {
-            fetch(`/scripts/extensions/${name}/manifest.json`).then(async response => {
+            // The manifest decides which build of an extension is current, so it must always be
+            // revalidated instead of being served from any freshness the browser has stored.
+            fetch(`/scripts/extensions/${name}/manifest.json`, { cache: 'no-cache' }).then(async response => {
                 if (response.ok) {
+                    if (name.startsWith('third-party/')) {
+                        const validator = response.headers.get('ETag') ?? response.headers.get('Last-Modified');
+                        const token = validator ? toVersionToken(validator) : '';
+                        if (token) {
+                            thirdPartyAssetVersions.set(name, token);
+                        }
+                    }
                     const json = await response.json();
                     obj[name] = json;
                     resolve();
@@ -794,7 +825,7 @@ function addExtensionStyle(name, manifest) {
     }
 
     return new Promise((resolve, reject) => {
-        const url = `/scripts/extensions/${name}/${manifest.css}${getExtensionAssetVersionQuery(name)}`;
+        const url = `/scripts/extensions/${name}/${manifest.css}${getExtensionAssetVersionQuery(name, manifest.css)}`;
         const id = sanitizeSelector(`${name}-css`);
 
         if ($(`link[id="${id}"]`).length === 0) {
@@ -826,7 +857,7 @@ function addExtensionScript(name, manifest) {
     }
 
     return new Promise((resolve, reject) => {
-        const url = `/scripts/extensions/${name}/${manifest.js}${getExtensionAssetVersionQuery(name)}`;
+        const url = `/scripts/extensions/${name}/${manifest.js}${getExtensionAssetVersionQuery(name, manifest.js)}`;
         const id = sanitizeSelector(`${name}-js`);
         let ready = false;
 
@@ -869,7 +900,7 @@ function addExtensionLocale(name, manifest) {
         return Promise.resolve();
     }
 
-    return fetch(`/scripts/extensions/${name}/${localeFile}`)
+    return fetch(`/scripts/extensions/${name}/${localeFile}${getExtensionAssetVersionQuery(name, localeFile)}`, { cache: 'no-cache' })
         .then(async response => {
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);

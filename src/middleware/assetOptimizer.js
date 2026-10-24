@@ -47,6 +47,9 @@ const CACHE_CONTROL_EXTENSIONS = 'no-cache';
 /** Request paths under this prefix belong to user-installed extensions. */
 const THIRD_PARTY_EXTENSION_PREFIX = '/scripts/extensions/third-party/';
 
+/** Same directory relative to the served root, for the versioning walk. */
+const THIRD_PARTY_EXTENSION_DIRECTORY = 'scripts/extensions/third-party';
+
 /** HTML must always be revalidated: it carries the current asset version. */
 const CACHE_CONTROL_HTML = 'no-cache, must-revalidate';
 
@@ -96,9 +99,11 @@ export function getAssetVersion() {
  * requested by a browser.
  * @param {string} root Directory to walk.
  * @param {Set<string>} extensions File extensions to collect.
+ * @param {string[]} [skipDirectories] Directories (absolute or root-relative) to leave out.
  * @returns {string[]} Absolute file paths.
  */
-export function collectAssetFiles(root, extensions = COMPRESSIBLE_EXTENSIONS) {
+export function collectAssetFiles(root, extensions = COMPRESSIBLE_EXTENSIONS, skipDirectories = []) {
+    const skip = new Set(skipDirectories.map(directory => path.resolve(root, directory)));
     const collected = [];
     const walk = directory => {
         let dirents;
@@ -110,6 +115,9 @@ export function collectAssetFiles(root, extensions = COMPRESSIBLE_EXTENSIONS) {
         for (const dirent of dirents) {
             const fullPath = path.join(directory, dirent.name);
             if (dirent.isDirectory()) {
+                if (skip.has(fullPath)) {
+                    continue;
+                }
                 walk(fullPath);
             } else if (dirent.isFile() && extensions.has(path.extname(fullPath).toLowerCase())) {
                 collected.push(fullPath);
@@ -133,7 +141,10 @@ export function collectAssetFiles(root, extensions = COMPRESSIBLE_EXTENSIONS) {
 export function computeAssetVersion({ roots = [], extraFiles = [] } = {}) {
     const files = [...extraFiles];
     for (const root of roots) {
-        files.push(...collectAssetFiles(root));
+        // User-installed extensions are updated at runtime and never served under a versioned
+        // URL, so they must not contribute to the version: updating one should not invalidate
+        // the cached URLs of every built-in asset on the next restart.
+        files.push(...collectAssetFiles(root, undefined, [THIRD_PARTY_EXTENSION_DIRECTORY]));
     }
 
     const hash = crypto.createHash('sha256');
